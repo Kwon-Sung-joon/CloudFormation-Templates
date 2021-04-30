@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create ALB, AS template
+
+
+Parameters:
+  ExportStackName:
+    Description: The name of the stack that exports the values
+    Type: String
+
+
+Resources:
+
+
+###########
+# Application Load Balancer 
+###########
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Name: WebServerALB
+      Scheme: internet-facing
+      SubnetMappings:
+        - SubnetId:  
+            Fn::ImportValue: !Sub '${ExportStackName}-PublicSubnet1'
+        - SubnetId:  
+            Fn::ImportValue: !Sub '${ExportStackName}-PublicSubnet2'
+      IpAddressType: ipv4
+      SecurityGroups: 
+        - !Ref ASConfigGroup
+
+###########
+# Application Load Balancer TargetGroup
+###########
+  LoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ALB-Target
+      TargetType: instance
+      HealthyThresholdCount: 2
+      HealthCheckIntervalSeconds: 30
+      Protocol: HTTP
+      Port: 80
+      VpcId:
+        Fn::ImportValue: !Sub '${ExportStackName}-LabVPC'
+
+
+###########
+# Application Load Balancer Listener
+###########
+  LoadBalancerListener:
+   Type: AWS::ElasticLoadBalancingV2::Listener
+   Properties:
+     DefaultActions:
+       - Type: "forward"
+         ForwardConfig:
+           TargetGroups: 
+            - TargetGroupArn: !Ref LoadBalancerTargetGroup
+     LoadBalancerArn: !Ref LoadBalancer
+     Port: 80
+     Protocol: "HTTP"
+
+###########
+# Auto Scaling Config Security Group
+###########
+
+  ASConfigGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: ASConfig
+      GroupDescription: ASG Config Security Group
+      VpcId: 
+        Fn::ImportValue: !Sub '${ExportStackName}-LabVPC'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ASConfig
+
+###########
+# Launch Configuration
+###########
+
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: ami-03d35c3e4f379f103
+      SecurityGroups: 
+        - !Ref ASConfigGroup
+      InstanceType: t2.micro
+  
+##########
+# Auto Scaling Group
+##########
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: my-ASG
+      MinSize: "1"
+      MaxSize: "4"
+      DesiredCapacity: "2"
+      HealthCheckGracePeriod: 180
+      HealthCheckType: ELB
+      LaunchConfigurationName: !Ref LaunchConfig
+      TargetGroupARNs: 
+        - !Ref LoadBalancerTargetGroup
+      VPCZoneIdentifier: 
+        - Fn::ImportValue: !Sub '${ExportStackName}-PublicSubnet1'
+        - Fn::ImportValue: !Sub '${ExportStackName}-PublicSubnet2'
+      MetricsCollection: 
+        - Granularity: "1Minute"
+      CapacityRebalance: true
+      Tags:
+        - Key: Name
+          Value: WebServer
+          PropagateAtLaunch: true
+
+
+Outputs:
+  ALBDns:
+    Value: !GetAtt LoadBalancer.DNSName
+    Description: Load Balancer Dns
+    Export:
+      Name: !Sub ${AWS::StackName}-LoadBalancerDns
+    
+
+
