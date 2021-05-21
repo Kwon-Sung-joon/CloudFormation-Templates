@@ -1,2 +1,0 @@
-# CloudFormation-Templates
-CloudFormation Templates
