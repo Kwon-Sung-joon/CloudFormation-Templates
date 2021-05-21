@@ -1,0 +1,255 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create ALB, AS template
+
+
+Parameters:
+  ExportStackName:
+    Description: The name of the stack that exports the values
+    Type: String
+
+  Email:
+    Type: String
+    Default: kofdx7@gmail.com
+
+  KeyName:
+    Type: String
+    Description: Select KeyPair
+
+  AMIID:
+    Type: String
+    Description: Insert AMIID
+    Default: ami-0c3875b921d298b30
+
+
+Resources:
+
+
+###########
+# Application Load Balancer 
+###########
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Name: WebServerALB
+      Scheme: internet-facing
+      SubnetMappings:
+        - SubnetId:  
+            Fn::ImportValue: !Sub '${ExportStackName}-PublicSubnet1'
+        - SubnetId:  
+            Fn::ImportValue: !Sub '${ExportStackName}-PublicSubnet2'
+      IpAddressType: ipv4
+      SecurityGroups: 
+        - !Ref ASConfigGroup
+
+###########
+# Application Load Balancer TargetGroup
+###########
+  LoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ALB-Target
+      TargetType: instance
+      HealthyThresholdCount: 2
+      HealthCheckIntervalSeconds: 30
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: true
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: 86400
+      Protocol: HTTP
+      Port: 80
+      VpcId:
+        Fn::ImportValue: !Sub '${ExportStackName}-LabVPC'
+
+
+###########
+# Application Load Balancer Listener
+###########
+  LoadBalancerListener:
+   Type: AWS::ElasticLoadBalancingV2::Listener
+   Properties:
+     DefaultActions:
+       - Type: "forward"
+         ForwardConfig:
+           TargetGroups: 
+            - TargetGroupArn: !Ref LoadBalancerTargetGroup
+     LoadBalancerArn: !Ref LoadBalancer
+     Port: 80
+     Protocol: "HTTP"
+
+
+###########
+# Auto Scaling Config Security Group
+###########
+
+  ASConfigGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: ASConfig
+      GroupDescription: ASG Config Security Group
+      VpcId: 
+        Fn::ImportValue: !Sub '${ExportStackName}-LabVPC'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ASConfig
+
+###########
+# Launch Configuration
+###########
+
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref AMIID
+      SecurityGroups: 
+        - !Ref ASConfigGroup
+      InstanceType: t2.micro
+      IamInstanceProfile: !Ref InstanceProfile
+      KeyName: !Ref KeyName
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo apt update -y
+          sudo apt install -y awscli
+          sudo curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          sudo apt install unzip  
+          sudo unzip awscliv2.zip
+          sudo ./aws/install
+
+          dbaddr='$mysql_hostname='"'"`aws cloudformation describe-stacks --query 'Stacks[].Outputs[?OutputKey==\`RDSEndPointAddress\`].OutputValue' --output=text --region=ap-northeast-2`"';"
+          sudo sed -i "4s/.*/$dbaddr/g" /var/www/html/basic/login/dbconn.php
+
+###########
+# IAM Role for Instance
+###########
+
+  KrReadCF:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: KrReadCF
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 'cloudformation:ListExports'
+                Resource: '*'
+              - Effect: Allow
+                Action: 'cloudformation:DescribeStacks'
+                Resource: '*'
+
+###########
+# Instance Profile
+###########
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref KrReadCF]
+      InstanceProfileName: KrReadCF
+
+
+##########
+# Auto Scaling Group
+##########
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: my-ASG
+      MinSize: "1"
+      MaxSize: "4"
+      DesiredCapacity: "2"
+      HealthCheckGracePeriod: 180
+      HealthCheckType: ELB
+      LaunchConfigurationName: !Ref LaunchConfig
+      TargetGroupARNs: 
+        - !Ref LoadBalancerTargetGroup
+      VPCZoneIdentifier: 
+        - Fn::ImportValue: !Sub '${ExportStackName}-PrivateSubnet1'
+        - Fn::ImportValue: !Sub '${ExportStackName}-PrivateSubnet2'
+      MetricsCollection: 
+        - Granularity: "1Minute"
+      CapacityRebalance: true
+      NotificationConfigurations:
+      - TopicARN: !Ref SnsTopic
+        NotificationTypes:
+        - autoscaling:EC2_INSTANCE_LAUNCH
+        - autoscaling:EC2_INSTANCE_LAUNCH_ERROR
+        - autoscaling:EC2_INSTANCE_TERMINATE
+        - autoscaling:EC2_INSTANCE_TERMINATE_ERROR
+        - autoscaling:TEST_NOTIFICATION
+      Tags:
+        - Key: Name
+          Value: WebServer
+          PropagateAtLaunch: true
+
+############
+# AS-CPU-Policy
+############
+  myCPUPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60.00
+
+###########
+# SNS-Topic
+###########
+  SnsTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: topic-sns
+      FifoTopic: False
+      TopicName: Project-sns
+
+###########
+# SNS-Subscription
+###########
+  SnsSub:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref Email
+      Protocol: Email
+      TopicArn: !Ref SnsTopic
+
+
+
+
+Outputs:
+  ALBDns:
+    Value: !GetAtt LoadBalancer.DNSName
+    Description: Load Balancer Dns
+    Export:
+      Name: !Sub ${AWS::StackName}-LoadBalancerDns
+
+  ALBHz:
+    Value: !GetAtt LoadBalancer.CanonicalHostedZoneID
+    Description: Load Balancer HZ
+    Export:
+      Name: !Sub ${AWS::StackName}-LoadBalancerHZ
+    
+
+
