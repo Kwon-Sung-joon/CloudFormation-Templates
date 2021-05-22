@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Modify Route Table for VPC Peering.
+
+
+Parameters:
+
+  ExportStackName:
+    Description: The name of the stack that exports the values
+    Type: String
+  
+  jpVPCCidr:
+    Type: String
+ 
+  Peering:
+    Description: peering connection id
+    Type: String
+
+Resources:
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: !Ref jpVPCCidr
+      VpcPeeringConnectionId: !Ref Peering
+      RouteTableId: 
+        Fn::ImportValue: !Sub '${ExportStackName}-PublicRouteTable'
+
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: !Ref jpVPCCidr
+      VpcPeeringConnectionId: !Ref Peering
+      RouteTableId: 
+        Fn::ImportValue: !Sub '${ExportStackName}-PrivateRouteTable'

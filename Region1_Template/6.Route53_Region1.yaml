@@ -1,0 +1,44 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Route53 template
+
+Parameters:
+  ExportStackName:
+    Description: The name of the stack that exports the values
+    Type: String 
+
+  KrALBDns:
+    Description: The name of the stack that exports the values
+    Type: String 
+
+  KrALBHz:
+    Description: The name of the stack that exports the values
+    Type: String 
+  HzId:
+    Description: The name of the stack that exports the values
+    Type: String
+    Default: Z02045551T74ATR5QH0EX
+
+
+Resources:
+
+  Server:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: Register DNS
+      HostedZoneId:
+        !Ref HzId
+      RecordSets:
+      - Name: www.suyeonshoes.click
+        Type: A
+        AliasTarget:
+          HostedZoneId: 
+            !Ref KrALBHz
+          DNSName:
+            !Ref KrALBDns
+      - Name: kr.suyeonshoes.click
+        Type: A
+        AliasTarget:
+          HostedZoneId: 
+            !Ref KrALBHz
+          DNSName:
+            !Ref KrALBDns
