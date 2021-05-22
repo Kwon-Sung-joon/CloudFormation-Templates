@@ -1,0 +1,14 @@
+aws s3 mb s3://BUCKET_NAME
+
+
+git clone https://github.com/aws-samples/ec2-auto-scaling-instance-refresh-sample.git
+
+cd ec2-auto-scaling-instance-refresh-sample
+
+sam build --use-container
+
+sam package --output-template-file packaged.yaml --s3-bucket golden-ami-suyeonshoes --region ap-northeast-2
+
+sam deploy --template-file packaged.yaml --stack-name myAS --capabilities CAPABILITY_IAM --region ap-northeast-2
+
+

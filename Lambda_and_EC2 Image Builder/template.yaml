@@ -1,0 +1,435 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+
+Metadata:
+  License:
+    Description: >
+      Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+      SPDX-License-Identifier: MIT-0
+      AutoScalingGroupInstanceType
+      Permission is hereby granted, free of charge, to any person obtaining a copy of this
+      software and associated documentation files (the "Software"), to deal in the Software
+      without restriction, including without limitation the rights to use, copy, modify,
+      merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+      permit persons to whom the Software is furnished to do so.
+      
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+      INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+      HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+      SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+  
+Parameters:
+  ExportStackName:
+    Description: The name of the stack that exports the values
+    Type: String
+    Default: "myVPC"
+  EnvironmentName:
+    Type: String
+    Default: "Web Server"
+  AmiId:
+    Type: String
+    Default: "ami-074636aec5e81a80a"
+  BuildInstanceType:
+    Type: String
+    Default: "t2.micro"
+    Description: "Image Builder instance type"
+  AutoScalingGroupInstanceType:
+    Type: String
+    Default: "t2.micro"
+    Description: Instance type for sample Auto Scaling groupi
+  KeyName:
+    Type: String
+    Default: "krAdmin"
+  Email:
+    Type: String
+    Default: "kofdx7@gmail.com"
+
+Resources:
+
+
+###########
+# InstanceRefreshHandler
+###########
+  InstanceRefreshHandler:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.7
+      MemorySize: 128
+      Timeout: 30
+      Role: !GetAtt InstanceRefreshHandlerLambdaRole.Arn
+      CodeUri: InstanceRefreshHandler/
+      Environment:
+        Variables:
+          AutoScalingGroupName: !Ref AutoScalingGroup
+
+
+###########
+# InstanceRefreshHandlerLambdaRole
+###########
+  InstanceRefreshHandlerLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: 
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/service-role/"
+      Policies:
+      - PolicyName: krlambdaExecution-InstanceRefreshHandler
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - autoscaling:StartInstanceRefresh
+            - autoscaling:Describe*
+            - ec2:CreateLaunchTemplateVersion
+            - ec2:DescribeLaunchTemplates
+            Resource: '*'
+
+###########
+# ImageBuilderSNSTopic
+###########
+  ImageBuilderSNSTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      Subscription:
+        - Endpoint: !GetAtt InstanceRefreshHandler.Arn
+          Protocol: lambda
+###########
+# SNSLambdaPermission
+###########
+
+  SNSLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+        FunctionName: !GetAtt InstanceRefreshHandler.Arn
+        Action: lambda:InvokeFunction
+        Principal: sns.amazonaws.com
+        SourceArn: !Ref ImageBuilderSNSTopic
+
+
+###########
+# EC2ImageBuilderRecipe
+###########
+  EC2ImageBuilderRecipe:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Name: EC2ImageBuilderRecipe
+      Description: This recipe updates the system and installs Docker CE 
+      ParentImage: !Ref AmiId
+      Components:
+        - ComponentArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:aws:component/update-linux/1.0.0/1"
+        - ComponentArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:aws:component/reboot-linux/1.0.1/1"
+      Version: "1.0.0"
+      
+###########
+# EC2ImageBuilderPipeline
+###########
+  EC2ImageBuilderPipeline:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Properties:
+      Name: EC2ImageBuilderPipeline
+      ImageRecipeArn: !Ref EC2ImageBuilderRecipe
+      InfrastructureConfigurationArn: !Ref EC2ImageBuilderInfrastructureConfiguration
+      DistributionConfigurationArn: !Ref DistributionConfiguration
+
+
+###########
+# EC2ImageBuilder DistributionConfiguration
+###########
+  DistributionConfiguration:
+    Type: AWS::ImageBuilder::DistributionConfiguration
+    Properties:
+      Name: 'distribution-configuration-name'
+      Description: 'description'
+      Distributions:
+        - Region: 'ap-northeast-2'
+          AmiDistributionConfiguration:
+            Name: 'distribution korea {{ imagebuilder:buildDate }}'
+        - Region: 'us-east-1'
+          AmiDistributionConfiguration:
+            Name: 'distribution backup {{ imagebuilder:buildDate }}'
+      Tags:
+        CustomerDistributionConfigTagKey1: 'CustomerDistributionConfigTagValue1'
+        CustomerDistributionConfigTagKey2: 'CustomerDistributionConfigTagValue2'
+
+
+
+
+###########
+# EC2ImageBuilderInfrastructureConfiguration
+###########
+  EC2ImageBuilderInfrastructureConfiguration:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties: 
+      Name: InstanceConfigurationForEC2ImageBuilder
+      InstanceTypes: 
+        - !Ref BuildInstanceType
+      InstanceProfileName: !Ref EC2ImageBuilderIAMInstanceProfile
+      SNSTopicArn: !Ref ImageBuilderSNSTopic
+      SubnetId:
+         Fn::ImportValue: !Sub '${ExportStackName}-PublicSubnet1' 
+      SecurityGroupIds: 
+        - !Ref ASTemplateGroup
+      TerminateInstanceOnFailure: true
+  
+###########
+# EC2ImageBuilderIAMRole
+###########  
+  EC2ImageBuilderIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: krEC2ImageBuilderIAM
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 'cloudformation:ListExports'
+                Resource: '*'
+              - Effect: Allow
+                Action: 'cloudformation:DescribeStacks'
+                Resource: '*'
+
+
+###########
+# EC2ImageBuilderIAMInstanceProfile
+###########  
+  EC2ImageBuilderIAMInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2ImageBuilderIAMRole
+
+
+###########
+# AutoScaling Group
+###########  
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MinSize: "1"
+      MaxSize: "4"
+      DesiredCapacity: "2"
+      HealthCheckGracePeriod: 180
+      HealthCheckType: ELB
+      TargetGroupARNs: 
+        - !Ref LoadBalancerTargetGroup
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub '${ExportStackName}-PrivateSubnet1'
+        - Fn::ImportValue: !Sub '${ExportStackName}-PrivateSubnet2'
+      MetricsCollection: 
+        - Granularity: "1Minute"
+      CapacityRebalance: true
+      NotificationConfigurations:
+      - TopicARN: !Ref SnsTopic
+        NotificationTypes:
+        - autoscaling:EC2_INSTANCE_LAUNCH
+        - autoscaling:EC2_INSTANCE_LAUNCH_ERROR
+        - autoscaling:EC2_INSTANCE_TERMINATE
+        - autoscaling:EC2_INSTANCE_TERMINATE_ERROR
+        - autoscaling:TEST_NOTIFICATION
+      LaunchTemplate: 
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+          PropagateAtLaunch: true
+
+############
+# AS-CPU-Policy
+############
+  myCPUPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60.00
+
+
+###########
+# SNS-Topic
+###########
+  SnsTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: topic-sns
+      FifoTopic: False
+      TopicName: Project-sns
+
+###########
+# SNS-Subscription
+###########
+  SnsSub:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref Email
+      Protocol: Email
+      TopicArn: !Ref SnsTopic
+
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        KeyName: !Ref KeyName
+        IamInstanceProfile:
+          Arn: !GetAtt EC2ImageBuilderIAMInstanceProfile.Arn
+        InstanceType: !Ref AutoScalingGroupInstanceType
+        SecurityGroupIds:
+          - !Ref ASTemplateGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            sudo apt update -y
+            sudo apt install -y awscli
+            sudo curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            sudo apt install unzip  
+            sudo unzip awscliv2.zip
+            sudo ./aws/install
+
+            dbaddr='$mysql_hostname='"'"`aws cloudformation describe-stacks --query 'Stacks[].Outputs[?OutputKey==\`RDSEndPointAddress\`].OutputValue' --output=text --region=ap-northeast-2`"';"
+            sudo sed -i "4s/.*/$dbaddr/g" /var/www/html/basic/login/dbconn.php
+
+###########
+# Application Load Balancer 
+###########
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Name: WebServerALB
+      Scheme: internet-facing
+      SubnetMappings:
+        - SubnetId:  
+            Fn::ImportValue: !Sub '${ExportStackName}-PublicSubnet1'
+        - SubnetId:  
+            Fn::ImportValue: !Sub '${ExportStackName}-PublicSubnet2'
+      IpAddressType: ipv4
+      SecurityGroups: 
+        - !Ref ASTemplateGroup
+
+###########
+# Application Load Balancer TargetGroup
+###########
+  LoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ALB-Target
+      TargetType: instance
+      HealthyThresholdCount: 2
+      HealthCheckIntervalSeconds: 30
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: true
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: 86400
+      Protocol: HTTP
+      Port: 80
+      VpcId:
+        Fn::ImportValue: !Sub '${ExportStackName}-LabVPC'
+
+
+###########
+# Application Load Balancer Listener
+###########
+  LoadBalancerListener:
+   Type: AWS::ElasticLoadBalancingV2::Listener
+   Properties:
+     DefaultActions:
+       - Type: "forward"
+         ForwardConfig:
+           TargetGroups: 
+            - TargetGroupArn: !Ref LoadBalancerTargetGroup
+     LoadBalancerArn: !Ref LoadBalancer
+     Port: 80
+     Protocol: "HTTP"
+
+
+###########
+# Auto Scaling Temp Security Group
+###########
+
+  ASTemplateGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: ASTemplate
+      GroupDescription: ASG Template Security Group
+      VpcId: 
+        Fn::ImportValue: !Sub '${ExportStackName}-LabVPC'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ASTemplate
+
+
+
+
+Outputs:
+  EC2ImageBuilderPipeline:
+    Description: Sample EC2 Image Builder Pipeline 
+    Value: !Ref EC2ImageBuilderPipeline
+  SNSTopic:
+    Description: Amazon SNS topic subscribed to the EC2 Image Builder pipeline to trigger Lambda
+    Value: !Ref ImageBuilderSNSTopic
+  LambdaFunction:
+    Description: AWS Lambda function handling EC2 Image Builder Notifications and triggering Auto Scaling Instance Refresh
+    Value: !Ref InstanceRefreshHandler
+  AutoScalingGroup:
+    Description: Sample Auto Scaling group 
+    Value: !Ref AutoScalingGroup
+  LaunchTemplate:
+    Description: Sample Launch Template for Auto Scaling group
+    Value: !Ref LaunchTemplate
+  ALBDns:
+    Value: !GetAtt LoadBalancer.DNSName
+    Description: Load Balancer Dns
+    Export:
+      Name: !Sub ${AWS::StackName}-LoadBalancerDns
+  ALBHz:
+    Value: !GetAtt LoadBalancer.CanonicalHostedZoneID
+    Description: Load Balancer HZ
+    Export:
+      Name: !Sub ${AWS::StackName}-LoadBalancerHZ
+    
