@@ -3,6 +3,11 @@ module "tf_vpc" {
   source = "../vpc"
 }
 
+#AWS Provider
+provider "aws" {
+	region = "ap-northeast-2"
+}
+
 #AWS Resource 
 
 
