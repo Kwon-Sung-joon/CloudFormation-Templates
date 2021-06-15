@@ -19,7 +19,7 @@ resource "aws_subnet" "tf_pub_subnet1" {
   vpc_id	= aws_vpc.tf_vpc.id
   cidr_block	= "192.168.10.0/24"
   availability_zone = "ap-northeast-2a"
-
+  map_public_ip_on_launch = true
   tags = {
     Name = "tf-pub-subnet1"
   }
@@ -29,7 +29,7 @@ resource "aws_subnet" "tf_pub_subnet2" {
   vpc_id	= aws_vpc.tf_vpc.id
   cidr_block	= "192.168.30.0/24"
   availability_zone = "ap-northeast-2c"
-
+  map_public_ip_on_launch = true
   tags = {
     Name = "tf-pub-subnet2"
   }
@@ -39,7 +39,7 @@ resource "aws_subnet" "tf_pri_subnet1" {
   vpc_id	= aws_vpc.tf_vpc.id
   cidr_block	= "192.168.20.0/24"
   availability_zone = "ap-northeast-2a"
-
+  
   tags = {
     Name = "tf-pri-subnet1"
   }
