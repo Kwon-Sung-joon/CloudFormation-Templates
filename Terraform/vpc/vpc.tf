@@ -115,3 +115,11 @@ output "pri_subnet2"{
 output "vpc"{
   value = aws_vpc.tf_vpc
 }
+output "pub_subnet1"{
+  value = aws_subnet.tf_pub_subnet1
+}
+output "pub_subnet2"{
+  value = aws_subnet.tf_pub_subnet2
+}
+
+
