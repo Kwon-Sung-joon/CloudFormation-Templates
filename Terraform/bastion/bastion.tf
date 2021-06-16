@@ -17,7 +17,7 @@ resource "aws_instance" "tf-bastion" {
   iam_instance_profile = aws_iam_instance_profile.bastion_profile.name
   vpc_security_group_ids = [aws_security_group.bastion_sg.id]
   subnet_id = module.tf_vpc.pub_subnet1.id
-  user_data = "${file("install_awscli.sh")}" 
+  user_data = "${file("./install_awscli.sh")}" 
   tags = {
     Name = "tf-bastion"
   }
